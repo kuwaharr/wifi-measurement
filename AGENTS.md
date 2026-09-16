@@ -17,7 +17,7 @@
 - Do not include failed attempts in averages or other calculations based on completed measurements.
 - Track how many attempts were required to obtain each successful measurement.
 - Each measurement must contain `area_name` so measurements can be grouped by physical area.
-- `area_name` should be typed through CLI every time measurement is recorded.
+- `area_name` must be entered through CLI for every measurement.
 - Use the official Ookla Speedtest CLI for network-performance measurements.
 - Invoke external commands through Python rather than reimplementing the Speedtest algorithm.
 
