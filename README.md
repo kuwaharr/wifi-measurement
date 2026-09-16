@@ -20,7 +20,7 @@ Timestamps are stored in UTC.
 
 A completed measurement preserves useful raw values from the Speedtest and Wi-Fi measurements.
 
-### Network Performace
+### Network Performance
 
 - download speed
 - upload speed
@@ -32,10 +32,10 @@ A completed measurement preserves useful raw values from the Speedtest and Wi-Fi
 - download latency low and high
 - upload loaded latency
 - upload loaded jitter
-- uploaded latency low and high
+- upload latency low and high
 - packet loss
 - downloaded bytes
-- downloaded elapsed time
+- download elapsed time
 - uploaded bytes
 - upload elapsed time
 
@@ -56,7 +56,7 @@ A completed measurement preserves useful raw values from the Speedtest and Wi-Fi
 ### Location and Measurement Metadata
 
 - latitude
-- longitutde
+- longitude
 - area name
 - UTC timestamp
 - number of attempts required for the successful measurement
