@@ -2,31 +2,64 @@
 
 Windows-based Python application for collecting Wi-Fi and network-quality measurements at physical locations.
 
-Each measurement records network performance, Wi-Fi information, location, and time.
-Raw measurements are stored in SQLite and can later be used to compare tables, areas, and access points.
+Each measurement records network performance, Wi-Fi information, location, and time. Raw measurements are stored in SQLite so that useful metrics can be selected and analyzed later without discarding the original measurement data.
 
 ## Measurement Method
 
 One measurement is one complete Speedtest-style test.
 
-Mesurements may include:
+Only successfully completed tests count as measurements.
 
-- download speed
-- upload speed
-- latency
-- jitter
-- packet loss
-- SSID
-- BSSID
-- signal strength
-- latitude and longitude
-- area name
-- number of attempts required for a successfull measurement
+A failed attempt does not count as a completed measurement and is not included in calculations based on completed measurements. The number of attempts required to obtain each successful measurement is recorded.
+
+Measurements are grouped by physical area using an `area_name`.
 
 Timestamps are stored in UTC.
 
-A failed attempt does not count as a completed measurement and is not included in measurement calculations.
-The number of attempts required to obtain each successfull measurement is recorded.
+## Raw Measurement Data
+
+A completed measurement preserves useful raw values from the Speedtest and Wi-Fi measurements.
+
+### Network Performace
+
+- download speed
+- upload speed
+- idle latency
+- idle jitter
+- idle latency low and high
+- download loaded latency
+- download loaded jitter
+- download latency low and high
+- upload loaded latency
+- upload loaded jitter
+- uploaded latency low and high
+- packet loss
+- downloaded bytes
+- downloaded elapsed time
+- uploaded bytes
+- upload elapsed time
+
+### Speedtest Server
+
+- server ID
+- server name
+- server location
+
+### Wi-Fi
+
+- SSID
+- BSSID
+- signal strength / RSSI
+- channel
+- frequency or band
+
+### Location and Measurement Metadata
+
+- latitude
+- longitutde
+- area name
+- UTC timestamp
+- number of attempts required for the successful measurement
 
 ## Environment
 
