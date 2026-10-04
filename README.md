@@ -6,15 +6,19 @@ Each measurement records network performance, Wi-Fi information, location, and t
 
 ## Measurement Method
 
-One measurement is one complete Speedtest-style test.
+One measurement is one successfully completed Speedtest-style test.
 
-Only successfully completed tests count as measurements.
+Failed attempts do not count as completed measurements and are not included in calculations based on completed measurements. The number of attempts required to obtain each successful measurement is recorded.
 
-A failed attempt does not count as a completed measurement and is not included in calculations based on completed measurements. The number of attempts required to obtain each successful measurement is recorded.
-
-Measurements are grouped by physical area using an `area_name`.
+Speedtest values are stored using the raw values and units returned by the Ookla Speedtest CLI, without conversion.
 
 Timestamps are stored in UTC.
+
+Each measurement includes the following required location metadata:
+
+- `location_type`: `inside` or `outside`
+- `location_name`: the building name for an indoor measurement, or a meaningful nearby place or landmark for an outdoor measurement
+- `location_detail`: a more precise description of the measurement location, including the floor number when applicable
 
 ## Raw Measurement Data
 
@@ -22,8 +26,8 @@ A completed measurement preserves useful raw values from the Speedtest and Wi-Fi
 
 ### Network Performance
 
-- download speed
-- upload speed
+- download bandwidth
+- upload bandwidth
 - idle latency
 - idle jitter
 - idle latency low and high
@@ -57,7 +61,9 @@ A completed measurement preserves useful raw values from the Speedtest and Wi-Fi
 
 - latitude
 - longitude
-- area name
+- location type
+- location name
+- location detail
 - UTC timestamp
 - number of attempts required for the successful measurement
 

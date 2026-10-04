@@ -16,10 +16,13 @@
 - A failed attempt is not a completed measurement.
 - Do not include failed attempts in averages or other calculations based on completed measurements.
 - Track how many attempts were required to obtain each successful measurement.
-- Each measurement must contain `area_name` so measurements can be grouped by physical area.
-- `area_name` must be entered through CLI for every measurement.
+- Each measurement must include `location_type`, `location_name`, and `location_detail`.
+- `location_type` must be either `inside` or `outside`.
+- `location_name` identifies the building for an indoor measurement or a meaningful nearby place or landmark for an outdoor measurement.
+- `location_detail` provides a more precise description of the measurement location, including the floor number when applicable.
 - Use the official Ookla Speedtest CLI for network-performance measurements.
 - Invoke external commands through Python rather than reimplementing the Speedtest algorithm.
+- Preserve Speedtest values using the raw values and units returned by the Ookla Speedtest CLI without conversion.
 
 ## Raw Data to Preserve
 
@@ -27,8 +30,8 @@ When available from a completed Speedtest, preserve:
 
 ### Network Performance
 
-- download speed
-- upload speed
+- download bandwidth
+- upload bandwidth
 - idle latency
 - idle jitter
 - idle latency low and high
@@ -66,7 +69,9 @@ Preserve:
 
 - latitude
 - longitude
-- area name
+- location type
+- location name
+- location detail
 - UTC timestamp
 - number of attempts required for the successful measurement
 
