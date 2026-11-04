@@ -84,6 +84,7 @@ Do not collect unnecessary optional Speedtest metadata, including:
 
 ## Development Guidelines
 
+- Do not edit README.md unless explicitly instructed.
 - Implement one feature rather than implementing many at the same time.
 - Prefer simple implementations over premature abstraction.
 - Prefer the Python standard library when sufficient.
