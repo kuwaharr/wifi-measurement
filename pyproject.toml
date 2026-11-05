@@ -1,2 +1,10 @@
+[project]
+name = "wifi-measurement"
+version = "0.1.0"
+dependencies = [
+    "qrcode==8.2",
+    "colorama==0.4.6; sys_platform == 'win32'",
+]
+
 [tool.ruff]
 line-length = 120
