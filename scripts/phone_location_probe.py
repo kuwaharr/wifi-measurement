@@ -168,6 +168,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         data["received_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        on_location = getattr(self.server, "on_location", None)
+        if on_location is not None:
+            if not on_location(data):
+                self.send_json(409, {"error": "Location is no longer being accepted."})
+                return
+            try:
+                self.send_json(200, {"status": "ok"})
+            except OSError:
+                print("Could not send location acknowledgement; accepted location retained.", file=sys.stderr)
+            finally:
+                on_responded = getattr(self.server, "on_location_responded", None)
+                if on_responded is not None:
+                    on_responded()
+            return
         print(json.dumps(data, indent=2, allow_nan=False), flush=True)
         self.send_json(200, {"status": "ok"})
 

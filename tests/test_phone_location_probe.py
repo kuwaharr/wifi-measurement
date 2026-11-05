@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
 from http.server import ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts.phone_location_probe import Handler, main, validate_location
 
@@ -286,6 +286,74 @@ class ReceiverTests(unittest.TestCase):
         server.shutdown.assert_called_once()
         thread_type.return_value.join.assert_called_once()
         self.assertIn("Stopped listening", output.getvalue())
+
+
+class CallbackTests(unittest.TestCase):
+    request = ReceiverTests.request
+    location = ReceiverTests.location
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.token = "test-session"
+        self.callback = Mock(return_value=True)
+        self.notified = threading.Event()
+        self.server.on_location = self.callback
+        self.server.on_location_responded = self.notified.set
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02})
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def test_callback_receives_selected_fields_without_standalone_print(self):
+        with redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(
+                self.request(body=json.dumps(self.location() | {"unwanted": "discard"})), (200, {"status": "ok"})
+            )
+        self.assertEqual(output.getvalue(), "")
+        self.assertTrue(self.notified.wait(1))
+        self.assertEqual(set(self.callback.call_args.args[0]), {"latitude", "longitude", "sent_at", "received_at"})
+
+    def test_rejected_callback_returns_409_without_notification(self):
+        self.callback.return_value = False
+        self.assertEqual(
+            self.request(body=json.dumps(self.location())), (409, {"error": "Location is no longer being accepted."})
+        )
+        self.assertFalse(self.notified.is_set())
+
+    def test_invalid_input_does_not_call_callbacks(self):
+        for body, path in (
+            ("{", "/location?token=test-session"),
+            (json.dumps(self.location() | {"latitude": "bad"}), "/location?token=test-session"),
+            (json.dumps(self.location() | {"sent_at": "bad"}), "/location?token=test-session"),
+            ("", "/location?token=wrong"),
+        ):
+            self.assertGreaterEqual(self.request(body=body, path=path)[0], 400)
+        self.callback.assert_not_called()
+        self.assertFalse(self.notified.is_set())
+
+    def test_acknowledgement_attempt_precedes_notification_even_on_disconnect(self):
+        calls = []
+
+        def send(handler, status, data):
+            calls.append("response")
+            raise BrokenPipeError
+
+        def notify():
+            calls.append("notification")
+            self.notified.set()
+
+        self.server.on_location_responded = notify
+        with patch.object(Handler, "send_json", send), redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(http.client.RemoteDisconnected):
+                self.request(body=json.dumps(self.location()))
+            self.assertTrue(self.notified.wait(1))
+        self.assertEqual(calls, ["response", "notification"])
+        self.callback.assert_called_once()
+        self.assertIn("accepted location retained", errors.getvalue())
+        self.assertNotIn("test-session", errors.getvalue())
 
 
 class MainLifecycleTests(unittest.TestCase):

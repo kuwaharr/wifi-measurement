@@ -13,6 +13,10 @@ from urllib.parse import urlencode
 PUBLIC_URL_PATTERN = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com(?=[\s/|]|$)")
 
 
+class TunnelCleanupError(RuntimeError):
+    """The tunnel resources could not be fully released."""
+
+
 def extract_public_url(line):
     match = PUBLIC_URL_PATTERN.search(line)
     return match.group(0) if match else None
@@ -53,8 +57,10 @@ def main():
     return run_tunnel(args.token)
 
 
-def run_tunnel(token):
+def run_tunnel(token, *, stop_event=None, on_ready=None):
     """Display the destination QR and monitor cloudflared until interrupted or failed."""
+    if stop_event is not None and stop_event.is_set():
+        return 0
     try:
         import qrcode  # noqa: F401
     except ImportError:
@@ -85,6 +91,8 @@ def run_tunnel(token):
     try:
         reader.start()
         while True:
+            if stop_event is not None and stop_event.is_set():
+                return 0
             if public_url is None and time.monotonic() >= deadline:
                 raise RuntimeError("Cloudflare did not generate a public URL within 60 seconds.")
             try:
@@ -105,6 +113,8 @@ def run_tunnel(token):
                 print("=" * 72, flush=True)
                 print("Scan inside your Shortcut. URL assigned; connection may take a moment.", flush=True)
                 print("This temporary URL can change each time you restart the tunnel.", flush=True)
+                if on_ready is not None:
+                    on_ready()
             elif public_url and re.search(r"\b(?:ERR|WRN)\b", line):
                 print(f"cloudflared: {line}", file=sys.stderr, flush=True)
     except KeyboardInterrupt:
@@ -117,15 +127,23 @@ def run_tunnel(token):
             print(line, file=sys.stderr)
         return 1
     finally:
-        if process.poll() is None:
-            process.terminate()
+        try:
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        reader.join(timeout=2)
-        process.stdout.close()
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+            finally:
+                if reader.ident is not None:
+                    reader.join(timeout=2)
+                process.stdout.close()
+            if reader.is_alive():
+                raise RuntimeError("Cloudflare output reader did not stop.")
+        except Exception as exc:
+            raise TunnelCleanupError(f"Could not clean up cloudflared: {exc}") from exc
 
 
 if __name__ == "__main__":

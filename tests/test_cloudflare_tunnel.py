@@ -1,7 +1,8 @@
 import io
 import subprocess
+import threading
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -9,6 +10,76 @@ from scripts.cloudflare_tunnel import build_location_url, extract_public_url, ma
 
 
 class TunnelTests(unittest.TestCase):
+    def test_stop_before_start_does_not_spawn(self):
+        stop = threading.Event()
+        stop.set()
+        ready = Mock()
+        with patch("scripts.cloudflare_tunnel.subprocess.Popen") as popen:
+            self.assertEqual(run_tunnel("test", stop_event=stop, on_ready=ready), 0)
+        popen.assert_not_called()
+        ready.assert_not_called()
+
+    def test_stop_after_qr_calls_ready_once_and_cleans_up(self):
+        stop = threading.Event()
+        process = Mock()
+        process.stdout = io.StringIO()
+        process.poll.return_value = None
+        order = []
+
+        def ready():
+            order.append("ready")
+            stop.set()
+
+        with (
+            patch("scripts.cloudflare_tunnel.subprocess.Popen", return_value=process),
+            patch("scripts.cloudflare_tunnel.queue.Queue") as queue_type,
+            patch("scripts.cloudflare_tunnel.print_qr_code", side_effect=lambda url: order.append("qr")),
+            redirect_stdout(io.StringIO()),
+        ):
+            queue_type.return_value.get.return_value = "INF | https://quiet-otter.trycloudflare.com |"
+            self.assertEqual(run_tunnel("test", stop_event=stop, on_ready=ready), 0)
+        self.assertEqual(order, ["qr", "ready"])
+        process.terminate.assert_called_once()
+        self.assertTrue(process.stdout.closed)
+
+    def test_stop_during_url_wait_cleans_up_without_ready(self):
+        stop = threading.Event()
+        ready = Mock()
+        process = Mock()
+        process.stdout = io.StringIO()
+        process.poll.return_value = None
+
+        def line(**kwargs):
+            stop.set()
+            return "INF still connecting"
+
+        with (
+            patch("scripts.cloudflare_tunnel.subprocess.Popen", return_value=process),
+            patch("scripts.cloudflare_tunnel.queue.Queue") as queue_type,
+            redirect_stdout(io.StringIO()),
+        ):
+            queue_type.return_value.get.side_effect = line
+            self.assertEqual(run_tunnel("test", stop_event=stop, on_ready=ready), 0)
+        ready.assert_not_called()
+        process.terminate.assert_called_once()
+        self.assertTrue(process.stdout.closed)
+
+    def test_ready_exception_is_reported_and_cleaned_up(self):
+        process = Mock()
+        process.stdout = io.StringIO()
+        process.poll.return_value = None
+        with (
+            patch("scripts.cloudflare_tunnel.subprocess.Popen", return_value=process),
+            patch("scripts.cloudflare_tunnel.queue.Queue") as queue_type,
+            patch("scripts.cloudflare_tunnel.print_qr_code"),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            queue_type.return_value.get.return_value = "INF | https://quiet-otter.trycloudflare.com |"
+            self.assertEqual(run_tunnel("test", on_ready=Mock(side_effect=RuntimeError("ready failed"))), 1)
+        process.terminate.assert_called_once()
+        self.assertTrue(process.stdout.closed)
+
     def test_cli_forwards_token_to_callable(self):
         with (
             patch("sys.argv", ["cloudflare_tunnel.py", "--token", "test-session"]),
