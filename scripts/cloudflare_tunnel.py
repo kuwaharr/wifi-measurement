@@ -46,17 +46,22 @@ def _read_output(stream, messages):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--token", required=True, help="Session token printed by phone_location_probe.py")
+    parser.add_argument("--token", required=True, help="Session token of an already running receiver")
     args = parser.parse_args()
     if not args.token or not args.token.isascii() or not re.fullmatch(r"[A-Za-z0-9_-]+", args.token):
         parser.error("Use the URL-safe session token printed by the receiver.")
+    return run_tunnel(args.token)
+
+
+def run_tunnel(token):
+    """Display the destination QR and monitor cloudflared until interrupted or failed."""
     try:
         import qrcode  # noqa: F401
     except ImportError:
         print("Missing qrcode. Run: .\\.venv\\Scripts\\python.exe -m pip install qrcode==8.2", file=sys.stderr)
         return 1
     print("Starting Cloudflare Tunnel to http://127.0.0.1:8765 ...", flush=True)
-    print("Keep phone_location_probe.py running in another terminal. Press Ctrl+C to stop the tunnel.", flush=True)
+    print("Press Ctrl+C to stop.", flush=True)
     try:
         process = subprocess.Popen(
             ["cloudflared", "tunnel", "--url", "http://127.0.0.1:8765", "--no-autoupdate"],
@@ -92,7 +97,7 @@ def main():
             found_url = extract_public_url(line)
             if found_url and public_url is None:
                 public_url = found_url
-                location_url = build_location_url(public_url, args.token)
+                location_url = build_location_url(public_url, token)
                 print("\n" + "=" * 72, flush=True)
                 print("IPHONE SHORTCUT JSON POST URL (contains session token)", flush=True)
                 print(f"\n{location_url}\n", flush=True)

@@ -1,13 +1,58 @@
 import io
+import subprocess
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
-from scripts.cloudflare_tunnel import build_location_url, extract_public_url, main, print_qr_code
+from scripts.cloudflare_tunnel import build_location_url, extract_public_url, main, print_qr_code, run_tunnel
 
 
 class TunnelTests(unittest.TestCase):
+    def test_cli_forwards_token_to_callable(self):
+        with (
+            patch("sys.argv", ["cloudflare_tunnel.py", "--token", "test-session"]),
+            patch("scripts.cloudflare_tunnel.run_tunnel", return_value=1) as tunnel,
+        ):
+            self.assertEqual(main(), 1)
+        tunnel.assert_called_once_with("test-session")
+
+    def test_url_timeout_terminates_process(self):
+        process = Mock()
+        process.stdout = io.StringIO()
+        process.poll.return_value = None
+        with (
+            patch("scripts.cloudflare_tunnel.subprocess.Popen", return_value=process),
+            patch("scripts.cloudflare_tunnel.time.monotonic", side_effect=[0, 61]),
+            patch("sys.stderr", new_callable=io.StringIO) as errors,
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(run_tunnel("test-session"), 1)
+        self.assertIn("within 60 seconds", errors.getvalue())
+        process.terminate.assert_called_once()
+        self.assertTrue(process.stdout.closed)
+
+    def test_interrupt_displays_matching_token_and_kills_unresponsive_process(self):
+        process = Mock()
+        process.stdout = io.StringIO()
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("cloudflared", 5), 0]
+        with (
+            patch("scripts.cloudflare_tunnel.subprocess.Popen", return_value=process),
+            patch("scripts.cloudflare_tunnel.queue.Queue") as queue_type,
+            patch("scripts.cloudflare_tunnel.print_qr_code") as qr,
+            redirect_stdout(io.StringIO()),
+        ):
+            queue_type.return_value.get.side_effect = [
+                "INF | https://quiet-otter.trycloudflare.com |",
+                KeyboardInterrupt,
+            ]
+            self.assertEqual(run_tunnel("test-session"), 0)
+        qr.assert_called_once_with("https://quiet-otter.trycloudflare.com/location?token=test-session")
+        process.terminate.assert_called_once()
+        process.kill.assert_called_once()
+        self.assertTrue(process.stdout.closed)
+
     def test_extract_url_from_cloudflared_logs(self):
         self.assertEqual(
             extract_public_url("INF | https://quiet-otter.trycloudflare.com |"), "https://quiet-otter.trycloudflare.com"

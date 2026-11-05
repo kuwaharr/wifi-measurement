@@ -1,12 +1,18 @@
-"""Receive iPhone location JSON through a separately managed tunnel until Ctrl+C."""
+"""Receive iPhone location JSON through an automatically managed tunnel until Ctrl+C."""
 
 import json
 import math
 import secrets
 import sys
+import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+
+if __package__:
+    from .cloudflare_tunnel import run_tunnel
+else:
+    from cloudflare_tunnel import run_tunnel
 
 
 class LocationError(ValueError):
@@ -56,9 +62,7 @@ def validate_location(data):
     try:
         result["sent_at"] = sent_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     except (ValueError, OverflowError) as exc:
-        raise LocationError(
-            "sent_at is outside the supported datetime range after UTC conversion.", "sent_at"
-        ) from exc
+        raise LocationError("sent_at is outside the supported datetime range after UTC conversion.", "sent_at") from exc
     return result
 
 
@@ -178,19 +182,27 @@ def main():
     with server:
         server.token = token
         print("Local server: http://127.0.0.1:8765/location (accessible on this laptop only).", flush=True)
-        print("From the project directory in another terminal, run:", flush=True)
-        print(f".\\.venv\\Scripts\\python.exe scripts\\cloudflare_tunnel.py --token {token}", flush=True)
-        print("Scan the launcher's QR code inside your iPhone Shortcut, then POST JSON to that exact URL.", flush=True)
-        print("Required JSON: latitude and longitude (numeric strings or numbers), sent_at (ISO 8601 with timezone).",
-              flush=True)
-        print("Content-Type: application/json. Coordinates are converted to float and checked before display.", flush=True)
-        print("Listening until Ctrl+C; received data is printed without being saved.", flush=True)
+        print(
+            "Starting the tunnel automatically. Scan the QR code inside your Shortcut and POST to that URL.", flush=True
+        )
+        print(
+            "Required JSON: latitude and longitude (numeric strings or numbers), sent_at (ISO 8601 with timezone).",
+            flush=True,
+        )
+        print(
+            "Content-Type: application/json. Coordinates are converted to float and checked before display.", flush=True
+        )
+        print("Ctrl+C stops both receiver and tunnel. Received data is printed without being saved.", flush=True)
+        receiver = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2})
+        receiver.start()
         try:
-            # Poll regularly so Windows can process Ctrl+C even without incoming requests.
-            server.serve_forever(poll_interval=0.2)
+            return run_tunnel(token)
         except KeyboardInterrupt:
+            return 0
+        finally:
+            server.shutdown()
+            receiver.join()
             print("\nStopped listening.", flush=True)
-    return 0
 
 
 if __name__ == "__main__":
