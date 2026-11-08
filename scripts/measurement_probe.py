@@ -1,4 +1,4 @@
-"""Receive one phone location, run one Ookla Speedtest and print the combined result."""
+"""Receive a phone location, read Windows Wi-Fi, run Ookla and print the combined result."""
 
 import json
 import queue
@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.cloudflare_tunnel import TunnelCleanupError, run_tunnel
 from scripts.phone_location_probe import Handler
 from src.speedtest import run_speedtest
+from src.wifi import get_wifi_info
 
 LOCATION_TIMEOUT = 180
 POLL_INTERVAL = 0.05
@@ -128,10 +129,14 @@ def main():
             if location is not None and inbox.responded.is_set():
                 break
             inbox.responded.wait(POLL_INTERVAL)
-        print("Location accepted. Starting one Speedtest...", flush=True)
+        print("Location accepted. Acquiring Wi-Fi information...", flush=True)
+        wifi = get_wifi_info()
+        print("Wi-Fi acquired. Starting one Speedtest...", flush=True)
         speedtest = run_speedtest()
         check_workers()
-        result_json = json.dumps({"location": location, "speedtest": speedtest}, indent=2, allow_nan=False)
+        result_json = json.dumps(
+            {"location": location, "wifi": wifi, "speedtest": speedtest}, indent=2, allow_nan=False
+        )
         exit_code = 0
     except KeyboardInterrupt:
         print("Measurement interrupted.", file=sys.stderr)

@@ -67,6 +67,9 @@ class InboxTests(unittest.TestCase):
 
 class MeasurementTests(unittest.TestCase):
     def setUp(self):
+        self.wifi_patch = patch.object(probe, "get_wifi_info", return_value={"ssid": "test", "rssi_dbm": -51})
+        self.wifi = self.wifi_patch.start()
+        self.addCleanup(self.wifi_patch.stop)
         self.servers = []
         self.stops = []
         self.output = io.StringIO()
@@ -138,9 +141,43 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(result["speedtest"], SPEEDTEST)
         self.assertEqual(result["location"]["sent_at"], LOCATION["sent_at"])
         self.assertEqual(result["location"]["latitude"], 40.42)
-        self.assertEqual(set(result), {"location", "speedtest"})
+        self.assertEqual(set(result), {"location", "wifi", "speedtest"})
+        self.assertEqual(result["wifi"], self.wifi.return_value)
         self.assertEqual(self.output.getvalue().count('"location":'), 1)
         self.assertNotIn(self.servers[0].token, json.dumps(result))
+
+    def test_wifi_runs_after_response_and_before_speedtest(self):
+        order = []
+
+        def wifi():
+            self.assertTrue(self.servers[0].on_location_responded.__self__.is_set())
+            order.append("wifi")
+            return {"ssid": "test"}
+
+        def speedtest():
+            order.append("speedtest")
+            return SPEEDTEST
+
+        self.wifi.side_effect = wifi
+        code, speed = self.run_main(speedtest=speedtest)
+        self.assertEqual(code, 0)
+        self.assertEqual(order, ["wifi", "speedtest"])
+        self.wifi.assert_called_once()
+        self.assertEqual(self.combined()["wifi"], {"ssid": "test"})
+
+    def test_wifi_failures_and_interrupt_do_not_run_speedtest(self):
+        for error, code in (
+            (RuntimeError("Multiple adapters"), 1),
+            (RuntimeError("Access denied"), 1),
+            (KeyboardInterrupt(), 130),
+        ):
+            with self.subTest(error=error):
+                self.output = io.StringIO()
+                self.wifi.side_effect = error
+                actual, speed = self.run_main()
+                self.assertEqual(actual, code)
+                speed.assert_not_called()
+                self.assertNotIn('"location":', self.output.getvalue())
 
     def test_invalid_then_valid_and_duplicate_http(self):
         statuses = []
@@ -178,6 +215,7 @@ class MeasurementTests(unittest.TestCase):
             code, speed = self.run_main(tunnel)
         self.assertEqual(code, 1)
         speed.assert_not_called()
+        self.wifi.assert_not_called()
         self.assertIn("Timed out", self.errors.getvalue())
 
     def test_tunnel_exit_or_exception_before_acceptance_fails(self):
