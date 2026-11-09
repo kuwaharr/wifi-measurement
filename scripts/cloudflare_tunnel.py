@@ -40,6 +40,10 @@ def print_qr_code(url):
     qr.print_ascii(tty=False, invert=True)
 
 
+def build_web_location_url(public_url, token):
+    return build_location_url(public_url, token).replace("/location?", "/phone-location?", 1)
+
+
 def _read_output(stream, messages):
     try:
         for line in stream:
@@ -51,14 +55,19 @@ def _read_output(stream, messages):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--token", required=True, help="Session token of an already running receiver")
+    parser.add_argument("--location-method", choices=("shortcut", "web"), default="shortcut")
     args = parser.parse_args()
     if not args.token or not args.token.isascii() or not re.fullmatch(r"[A-Za-z0-9_-]+", args.token):
         parser.error("Use the URL-safe session token printed by the receiver.")
+    if args.location_method == "web":
+        return run_tunnel(args.token, location_method="web")
     return run_tunnel(args.token)
 
 
-def run_tunnel(token, *, stop_event=None, on_ready=None):
+def run_tunnel(token, *, stop_event=None, on_ready=None, location_method="shortcut"):
     """Display the destination QR and monitor cloudflared until interrupted or failed."""
+    if location_method not in ("shortcut", "web"):
+        raise ValueError("Unknown location method.")
     if stop_event is not None and stop_event.is_set():
         return 0
     try:
@@ -105,13 +114,25 @@ def run_tunnel(token, *, stop_event=None, on_ready=None):
             found_url = extract_public_url(line)
             if found_url and public_url is None:
                 public_url = found_url
-                location_url = build_location_url(public_url, token)
+                builder = build_web_location_url if location_method == "web" else build_location_url
+                location_url = builder(public_url, token)
                 print("\n" + "=" * 72, flush=True)
-                print("IPHONE SHORTCUT JSON POST URL (contains session token)", flush=True)
+                print(
+                    "PHONE WEB PAGE URL"
+                    if location_method == "web"
+                    else "IPHONE SHORTCUT JSON POST URL (contains session token)",
+                    flush=True,
+                )
                 print(f"\n{location_url}\n", flush=True)
                 print_qr_code(location_url)
                 print("=" * 72, flush=True)
-                print("Scan inside your Shortcut. URL assigned; connection may take a moment.", flush=True)
+                if location_method == "web":
+                    print(
+                        "Scan with your phone camera and open in your browser. Connection may take a moment.",
+                        flush=True,
+                    )
+                else:
+                    print("Scan inside your Shortcut. URL assigned; connection may take a moment.", flush=True)
                 print("This temporary URL can change each time you restart the tunnel.", flush=True)
                 if on_ready is not None:
                     on_ready()

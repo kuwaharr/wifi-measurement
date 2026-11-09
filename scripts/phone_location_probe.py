@@ -1,5 +1,6 @@
 """Receive iPhone location JSON through an automatically managed tunnel until Ctrl+C."""
 
+import argparse
 import json
 import math
 import secrets
@@ -7,12 +8,20 @@ import sys
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 if __package__:
     from .cloudflare_tunnel import run_tunnel
 else:
     from cloudflare_tunnel import run_tunnel
+
+PAGE_PATH = Path(__file__).resolve().parents[1] / "web" / "phone-location.html"
+
+
+def valid_token(query, expected):
+    tokens = parse_qs(query, keep_blank_values=True).get("token", [])
+    return len(tokens) == 1 and secrets.compare_digest(tokens[0].encode("utf-8"), expected.encode("utf-8"))
 
 
 class LocationError(ValueError):
@@ -84,10 +93,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
+        url = urlsplit(self.path)
+        if url.path == "/phone-location":
+            if not valid_token(url.query, self.server.token):
+                self.send_json(403, {"error": "Missing or invalid token."})
+                return
+            try:
+                body = PAGE_PATH.read_bytes()
+            except OSError:
+                print("Could not read phone location page.", file=sys.stderr)
+                self.send_json(500, {"error": "Location page is unavailable."})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if urlsplit(self.path).path != "/location":
             self.send_json(404, {"error": "Use /location."})
             return
@@ -99,8 +128,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Use POST /location."})
             return
 
-        tokens = parse_qs(url.query).get("token", [])
-        if len(tokens) != 1 or not secrets.compare_digest(tokens[0].encode("utf-8"), self.server.token.encode("utf-8")):
+        if not valid_token(url.query, self.server.token):
             self.send_json(403, {"error": "Missing or invalid token."})
             return
         if self.headers.get_content_type() != "application/json":
@@ -186,7 +214,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"status": "ok"})
 
 
-def main():
+def main(argv=()):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--location-method", choices=("shortcut", "web"), default="shortcut")
+    args = parser.parse_args(argv)
     token = secrets.token_urlsafe(24)
     try:
         server = ThreadingHTTPServer(("127.0.0.1", 8765), Handler)
@@ -196,9 +227,7 @@ def main():
     with server:
         server.token = token
         print("Local server: http://127.0.0.1:8765/location (accessible on this laptop only).", flush=True)
-        print(
-            "Starting the tunnel automatically. Scan the QR code inside your Shortcut and POST to that URL.", flush=True
-        )
+        print("Starting the tunnel automatically.", flush=True)
         print(
             "Required JSON: latitude and longitude (numeric strings or numbers), sent_at (ISO 8601 with timezone).",
             flush=True,
@@ -210,6 +239,8 @@ def main():
         receiver = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2})
         receiver.start()
         try:
+            if args.location_method == "web":
+                return run_tunnel(token, location_method="web")
             return run_tunnel(token)
         except KeyboardInterrupt:
             return 0
@@ -220,4 +251,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

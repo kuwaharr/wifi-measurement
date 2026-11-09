@@ -1,5 +1,6 @@
 """Receive a phone location, read Windows Wi-Fi, run Ookla and print the combined result."""
 
+import argparse
 import json
 import queue
 import secrets
@@ -64,7 +65,10 @@ class LocationInbox:
                 self.accepting = False
 
 
-def main():
+def main(argv=()):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--location-method", choices=("shortcut", "web"), default="shortcut")
+    args = parser.parse_args(argv)
     inbox = LocationInbox()
     stop = threading.Event()
     tunnel_results = queue.Queue()
@@ -77,7 +81,8 @@ def main():
 
     def tunnel_worker():
         try:
-            code = run_tunnel(token, stop_event=stop, on_ready=inbox.on_ready)
+            options = {"location_method": "web"} if args.location_method == "web" else {}
+            code = run_tunnel(token, stop_event=stop, on_ready=inbox.on_ready, **options)
             error = None
         except BaseException as exc:
             code, error = 1, exc
@@ -181,4 +186,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

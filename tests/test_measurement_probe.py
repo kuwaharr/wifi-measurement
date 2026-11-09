@@ -104,7 +104,7 @@ class MeasurementTests(unittest.TestCase):
             raise RuntimeError("Test tunnel was not stopped")
         return 0
 
-    def run_main(self, tunnel=None, speedtest=None):
+    def run_main(self, tunnel=None, speedtest=None, argv=()):
         self.servers = []
         self.stops = []
         with (
@@ -116,7 +116,7 @@ class MeasurementTests(unittest.TestCase):
         ):
             if speedtest is None:
                 speed.return_value = SPEEDTEST
-            code = probe.main()
+            code = probe.main(argv)
         for server in self.servers:
             self.assertEqual(server.socket.fileno(), -1)
             with ThreadingHTTPServer(server.server_address, probe.Handler):
@@ -145,6 +145,26 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(result["wifi"], self.wifi.return_value)
         self.assertEqual(self.output.getvalue().count('"location":'), 1)
         self.assertNotIn(self.servers[0].token, json.dumps(result))
+
+    def test_web_selection_and_browser_json_follow_existing_measurement_flow(self):
+        def tunnel(token, *, stop_event, on_ready, location_method):
+            self.assertEqual(location_method, "web")
+            self.stops.append(stop_event)
+            on_ready()
+            self.assertEqual(
+                self.post({"latitude": 40.42, "longitude": -86.91, "sent_at": "2026-11-07T12:00:00.000Z"}),
+                (200, {"status": "ok"}),
+            )
+            stop_event.wait(3)
+            return 0
+
+        code, speed = self.run_main(tunnel=tunnel, argv=["--location-method", "web"])
+        self.assertEqual(code, 0)
+        self.wifi.assert_called_once()
+        speed.assert_called_once()
+        result = self.combined()
+        self.assertEqual(result["location"]["latitude"], 40.42)
+        self.assertEqual(set(result), {"location", "wifi", "speedtest"})
 
     def test_wifi_runs_after_response_and_before_speedtest(self):
         order = []
