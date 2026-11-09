@@ -92,3 +92,13 @@ Do not collect unnecessary optional Speedtest metadata, including:
 - Keep measurement acquisition, storage, and analysis separate.
 - Do not introduce PostgreSQL or a web backend unless requirements change.
 - Preserve existing project conventions unless there is a concrete reason to change them.
+
+## Planning Documents
+
+- Use `docs/plans/` for feature specifications, implementation plans, and implementation and verification records.
+- Include a status section in each document using one of these values:
+  - `draft`: Being written or reviewed; implementation is not yet approved.
+  - `approved`: Approved for implementation; implementation or required verification is still in progress.
+  - `completed`: Implementation and required verification are complete.
+- Define the status values here only; do not repeat their definitions in individual planning documents.
+- Keep each document's current status, feature-specific completion criteria, verification results, and unverified items in that document. Distinguish automated tests from manual verification.

@@ -4,8 +4,6 @@
 
 `completed`
 
-状態は `draft`（作成・確認中）、`approved`（承認済み）、`completed`（実装・検証完了）で管理する。
-
 PC側の実装・自動テストと、利用者によるWindows・iPhoneでの正常系の実機確認が完了したため `completed` とする。未確認の異常系は検証記録に明記する。
 
 ## 目的
