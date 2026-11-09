@@ -67,7 +67,7 @@ class LocationInbox:
 
 def main(argv=()):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--location-method", choices=("shortcut", "web"), default="shortcut")
+    parser.add_argument("--location-method", choices=("shortcut", "web"), default="web")
     args = parser.parse_args(argv)
     inbox = LocationInbox()
     stop = threading.Event()

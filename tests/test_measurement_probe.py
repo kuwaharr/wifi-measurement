@@ -104,7 +104,7 @@ class MeasurementTests(unittest.TestCase):
             raise RuntimeError("Test tunnel was not stopped")
         return 0
 
-    def run_main(self, tunnel=None, speedtest=None, argv=()):
+    def run_main(self, tunnel=None, speedtest=None, argv=("--location-method", "shortcut")):
         self.servers = []
         self.stops = []
         with (
@@ -158,7 +158,7 @@ class MeasurementTests(unittest.TestCase):
             stop_event.wait(3)
             return 0
 
-        code, speed = self.run_main(tunnel=tunnel, argv=["--location-method", "web"])
+        code, speed = self.run_main(tunnel=tunnel, argv=())
         self.assertEqual(code, 0)
         self.wifi.assert_called_once()
         speed.assert_called_once()
@@ -332,7 +332,7 @@ class MeasurementTests(unittest.TestCase):
                 redirect_stdout(self.output),
                 redirect_stderr(self.errors),
             ):
-                self.assertEqual(probe.main(), 1)
+                self.assertEqual(probe.main(["--location-method", "shortcut"]), 1)
         self.assertNotIn('"location":', self.output.getvalue())
         self.assertIn("Cleanup failed", self.errors.getvalue())
         self.assertTrue(self.stops[0].is_set())

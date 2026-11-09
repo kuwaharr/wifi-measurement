@@ -113,7 +113,7 @@ class SelectionTests(unittest.TestCase):
             patch.object(phone, "run_tunnel", return_value=0) as run,
             redirect_stdout(io.StringIO()),
         ):
-            self.assertEqual(phone.main(["--location-method", "web"]), 0)
+            self.assertEqual(phone.main(), 0)
         self.assertEqual(run.call_args.kwargs, {"location_method": "web"})
 
     def test_tunnel_cli_forwards_web_method(self):
