@@ -280,7 +280,7 @@ class ReceiverTests(unittest.TestCase):
             redirect_stdout(io.StringIO()) as output,
         ):
             server = server_type.return_value
-            self.assertEqual(main(["--location-method", "shortcut"]), 0)
+            self.assertEqual(main(), 0)
         server.__exit__.assert_called_once()
         tunnel.assert_called_once_with(server.token)
         server.shutdown.assert_called_once()
@@ -396,7 +396,7 @@ class MainLifecycleTests(unittest.TestCase):
                     patch("scripts.phone_location_probe.run_tunnel", side_effect=tunnel),
                     redirect_stdout(io.StringIO()) as output,
                 ):
-                    self.assertEqual(main(["--location-method", "shortcut"]), exit_code)
+                    self.assertEqual(main(), exit_code)
                 self.assertIn('"sent_at": "2026-11-04T12:00:00Z"', output.getvalue())
                 self.assertEqual(servers[0].socket.fileno(), -1)
                 with ThreadingHTTPServer(servers[0].server_address, Handler):

@@ -6,7 +6,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
-from scripts.cloudflare_tunnel import build_location_url, extract_public_url, main, print_qr_code, run_tunnel
+from scripts.cloudflare_tunnel import build_web_location_url, extract_public_url, main, print_qr_code, run_tunnel
 
 
 class TunnelTests(unittest.TestCase):
@@ -119,7 +119,7 @@ class TunnelTests(unittest.TestCase):
                 KeyboardInterrupt,
             ]
             self.assertEqual(run_tunnel("test-session"), 0)
-        qr.assert_called_once_with("https://quiet-otter.trycloudflare.com/location?token=test-session")
+        qr.assert_called_once_with("https://quiet-otter.trycloudflare.com/phone-location?token=test-session")
         process.terminate.assert_called_once()
         process.kill.assert_called_once()
         self.assertTrue(process.stdout.closed)
@@ -136,8 +136,8 @@ class TunnelTests(unittest.TestCase):
             self.assertIsNone(extract_public_url(line))
 
     def test_build_url_preserves_token(self):
-        url = urlsplit(build_location_url("https://quiet-otter.trycloudflare.com", "a+b /?"))
-        self.assertEqual(url.path, "/location")
+        url = urlsplit(build_web_location_url("https://quiet-otter.trycloudflare.com", "a+b /?"))
+        self.assertEqual(url.path, "/phone-location")
         self.assertEqual(parse_qs(url.query), {"token": ["a+b /?"]})
 
     def test_reject_invalid_base_url_or_empty_token(self):
@@ -147,10 +147,10 @@ class TunnelTests(unittest.TestCase):
             ("https://a.trycloudflare.com", ""),
         ):
             with self.subTest(url=url, token=token), self.assertRaises(ValueError):
-                build_location_url(url, token)
+                build_web_location_url(url, token)
 
     def test_real_qr_can_encode_full_destination(self):
-        url = build_location_url("https://quiet-otter.trycloudflare.com", "a" * 32)
+        url = build_web_location_url("https://quiet-otter.trycloudflare.com", "a" * 32)
         output = io.StringIO()
         with redirect_stdout(output):
             print_qr_code(url)

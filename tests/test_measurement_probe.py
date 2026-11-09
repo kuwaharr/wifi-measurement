@@ -104,7 +104,7 @@ class MeasurementTests(unittest.TestCase):
             raise RuntimeError("Test tunnel was not stopped")
         return 0
 
-    def run_main(self, tunnel=None, speedtest=None, argv=("--location-method", "shortcut")):
+    def run_main(self, tunnel=None, speedtest=None, argv=()):
         self.servers = []
         self.stops = []
         with (
@@ -146,9 +146,8 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(self.output.getvalue().count('"location":'), 1)
         self.assertNotIn(self.servers[0].token, json.dumps(result))
 
-    def test_web_selection_and_browser_json_follow_existing_measurement_flow(self):
-        def tunnel(token, *, stop_event, on_ready, location_method):
-            self.assertEqual(location_method, "web")
+    def test_browser_json_follows_existing_measurement_flow(self):
+        def tunnel(token, *, stop_event, on_ready):
             self.stops.append(stop_event)
             on_ready()
             self.assertEqual(
@@ -332,7 +331,7 @@ class MeasurementTests(unittest.TestCase):
                 redirect_stdout(self.output),
                 redirect_stderr(self.errors),
             ):
-                self.assertEqual(probe.main(["--location-method", "shortcut"]), 1)
+                self.assertEqual(probe.main(), 1)
         self.assertNotIn('"location":', self.output.getvalue())
         self.assertIn("Cleanup failed", self.errors.getvalue())
         self.assertTrue(self.stops[0].is_set())

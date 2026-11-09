@@ -216,8 +216,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main(argv=()):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--location-method", choices=("shortcut", "web"), default="web")
-    args = parser.parse_args(argv)
+    parser.parse_args(argv)
     token = secrets.token_urlsafe(24)
     try:
         server = ThreadingHTTPServer(("127.0.0.1", 8765), Handler)
@@ -239,8 +238,6 @@ def main(argv=()):
         receiver = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2})
         receiver.start()
         try:
-            if args.location_method == "web":
-                return run_tunnel(token, location_method="web")
             return run_tunnel(token)
         except KeyboardInterrupt:
             return 0

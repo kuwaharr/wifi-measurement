@@ -88,7 +88,7 @@ class PageTests(unittest.TestCase):
         self.assertEqual(headers["Cache-Control"], "no-store")
 
 
-class SelectionTests(unittest.TestCase):
+class WebStartupTests(unittest.TestCase):
     def test_url_builder(self):
         self.assertEqual(
             tunnel.build_web_location_url("https://test.trycloudflare.com", "a+b"),
@@ -98,31 +98,53 @@ class SelectionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tunnel.build_web_location_url(url, token)
 
-    def test_invalid_selection_is_rejected_before_resources_start(self):
+    def test_removed_arguments_are_rejected_before_resources_start(self):
         for module in (phone, measurement):
-            with self.subTest(module=module.__name__), patch.object(module, "ThreadingHTTPServer") as server:
-                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
-                    module.main(["--location-method", "invalid"])
-                self.assertEqual(error.exception.code, 2)
-                server.assert_not_called()
+            for value in ("shortcut", "web", "invalid"):
+                with (
+                    self.subTest(module=module.__name__, value=value),
+                    patch.object(module, "ThreadingHTTPServer") as server,
+                    patch.object(module, "run_tunnel") as run,
+                    redirect_stderr(io.StringIO()),
+                ):
+                    with self.assertRaises(SystemExit) as error:
+                        module.main(["--location-method", value])
+                    self.assertEqual(error.exception.code, 2)
+                    server.assert_not_called()
+                    run.assert_not_called()
 
-    def test_phone_forwards_web_method(self):
+    def test_phone_starts_tunnel_without_arguments(self):
         with (
-            patch.object(phone, "ThreadingHTTPServer"),
+            patch.object(phone, "ThreadingHTTPServer") as server,
             patch.object(phone.threading, "Thread"),
             patch.object(phone, "run_tunnel", return_value=0) as run,
             redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(phone.main(), 0)
-        self.assertEqual(run.call_args.kwargs, {"location_method": "web"})
+        run.assert_called_once_with(server.return_value.token)
 
-    def test_tunnel_cli_forwards_web_method(self):
+    def test_tunnel_cli_starts_without_method_argument(self):
         with (
-            patch("sys.argv", ["cloudflare_tunnel.py", "--token", "test", "--location-method", "web"]),
+            patch("sys.argv", ["cloudflare_tunnel.py", "--token", "test"]),
             patch.object(tunnel, "run_tunnel", return_value=0) as run,
         ):
             self.assertEqual(tunnel.main(), 0)
-        run.assert_called_once_with("test", location_method="web")
+        run.assert_called_once_with("test")
+
+    def test_tunnel_cli_rejects_removed_arguments_before_start(self):
+        for value in ("shortcut", "web"):
+            with (
+                self.subTest(value=value),
+                patch("sys.argv", ["cloudflare_tunnel.py", "--token", "test", "--location-method", value]),
+                patch.object(tunnel, "run_tunnel") as run,
+                patch.object(tunnel.subprocess, "Popen") as popen,
+                redirect_stderr(io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as error:
+                    tunnel.main()
+                self.assertEqual(error.exception.code, 2)
+                run.assert_not_called()
+                popen.assert_not_called()
 
     def test_web_qr_and_ready_callback(self):
         stop = threading.Event()
@@ -136,7 +158,7 @@ class SelectionTests(unittest.TestCase):
             redirect_stdout(io.StringIO()) as output,
         ):
             queue_type.return_value.get.return_value = "https://test.trycloudflare.com"
-            self.assertEqual(tunnel.run_tunnel("test", location_method="web", stop_event=stop, on_ready=stop.set), 0)
+            self.assertEqual(tunnel.run_tunnel("test", stop_event=stop, on_ready=stop.set), 0)
         qr.assert_called_once_with("https://test.trycloudflare.com/phone-location?token=test")
         self.assertIn("phone camera", output.getvalue())
         process.terminate.assert_called_once()

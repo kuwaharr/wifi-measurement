@@ -67,8 +67,7 @@ class LocationInbox:
 
 def main(argv=()):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--location-method", choices=("shortcut", "web"), default="web")
-    args = parser.parse_args(argv)
+    parser.parse_args(argv)
     inbox = LocationInbox()
     stop = threading.Event()
     tunnel_results = queue.Queue()
@@ -81,8 +80,7 @@ def main(argv=()):
 
     def tunnel_worker():
         try:
-            options = {"location_method": "web"} if args.location_method == "web" else {}
-            code = run_tunnel(token, stop_event=stop, on_ready=inbox.on_ready, **options)
+            code = run_tunnel(token, stop_event=stop, on_ready=inbox.on_ready)
             error = None
         except BaseException as exc:
             code, error = 1, exc
