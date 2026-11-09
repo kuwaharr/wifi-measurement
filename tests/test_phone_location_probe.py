@@ -10,6 +10,8 @@ from unittest.mock import Mock, patch
 
 from scripts.phone_location_probe import Handler, main, validate_location
 
+METADATA = {"location_type": "inside", "location_name": "Example Hall", "location_detail": "2nd floor"}
+
 
 class ReceiverTests(unittest.TestCase):
     @classmethod
@@ -35,7 +37,7 @@ class ReceiverTests(unittest.TestCase):
             connection.close()
 
     def location(self):
-        return {"latitude": 40.42, "longitude": -86.91, "sent_at": "2026-11-04T12:00:00Z"}
+        return {"latitude": 40.42, "longitude": -86.91, "sent_at": "2026-11-04T12:00:00Z", **METADATA}
 
     def test_success_prints_only_selected_fields_and_server_timestamp(self):
         data = self.location() | {"received_at": "fake", "unwanted": "discard"}
@@ -45,7 +47,7 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual((status, result), (200, {"status": "ok"}))
         printed = json.loads(output.getvalue())
         self.assertEqual(printed["latitude"], data["latitude"])
-        self.assertEqual(set(printed), {"latitude", "longitude", "sent_at", "received_at"})
+        self.assertEqual(set(printed), {"latitude", "longitude", "sent_at", "received_at", *METADATA})
         self.assertNotIn("unwanted", printed)
         self.assertEqual(datetime.fromisoformat(printed["received_at"]).utcoffset(), timedelta(0))
         self.assertNotIn("test-session", errors.getvalue())
@@ -61,7 +63,7 @@ class ReceiverTests(unittest.TestCase):
             self.location() | {"latitude": float("nan")},
             self.location() | {"longitude": float("inf")},
             self.location() | {"sent_at": None},
-            self.location() | {"sent_at": "2026-11-04T12:00:00"},
+            self.location() | {"sent_at": "2026-11-04T12:00:00", **METADATA},
         ]
         for data in invalid:
             with self.subTest(data=data), redirect_stdout(io.StringIO()) as output:
@@ -84,6 +86,47 @@ class ReceiverTests(unittest.TestCase):
             413,
         )
 
+    def test_metadata_validation_and_unicode_boundaries(self):
+        for kind in ("inside", "outside"):
+            data = self.location() | {
+                "location_type": kind,
+                "location_name": "  日本語 😀 <hall>  ",
+                "location_detail": "  floor 2\n  east window  ",
+            }
+            result = validate_location(data)
+            self.assertEqual(result["location_type"], kind)
+            self.assertEqual(result["location_name"], "日本語 😀 <hall>")
+            self.assertEqual(result["location_detail"], "floor 2\n  east window")
+        for field, limit in (("location_name", 200), ("location_detail", 500)):
+            self.assertEqual(validate_location(self.location() | {field: "😀" * limit})[field], "😀" * limit)
+            with self.assertRaises(ValueError):
+                validate_location(self.location() | {field: "😀" * (limit + 1)})
+
+    def test_invalid_metadata_returns_validation_field_and_no_success_output(self):
+        cases = []
+        for field in METADATA:
+            data = self.location()
+            del data[field]
+            cases.append((field, data))
+            for value in (None, True, 123, [], {}):
+                cases.append((field, self.location() | {field: value}))
+        for value in ("Inside", "unknown", " inside", "inside ", ""):
+            cases.append(("location_type", self.location() | {"location_type": value}))
+        for field, limit in (("location_name", 200), ("location_detail", 500)):
+            for value in ("", " \n\t ", "bad\0text", "x" * (limit + 1)):
+                cases.append((field, self.location() | {field: value}))
+        for field, data in cases:
+            with self.subTest(field=field, data=data), redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(ValueError):
+                    validate_location(data)
+                status, response = self.request(body=json.dumps(data))
+                self.assertEqual(status, 400)
+                self.assertEqual(response["stage"], "validation")
+                self.assertEqual(response["field"], field)
+                self.assertEqual(output.getvalue(), "")
+        old = {key: value for key, value in self.location().items() if key not in METADATA}
+        self.assertEqual(self.request(body=json.dumps(old))[0], 400)
+
     def test_validation_response_identifies_field_and_reason(self):
         cases = [
             ([], None, "Location must be a JSON object."),
@@ -98,12 +141,12 @@ class ReceiverTests(unittest.TestCase):
                 "sent_at must be a JSON string containing an ISO 8601 datetime with a timezone.",
             ),
             (
-                self.location() | {"sent_at": "not-a-date"},
+                self.location() | {"sent_at": "not-a-date", **METADATA},
                 "sent_at",
                 "sent_at has an invalid ISO 8601 datetime format. Example: 2026-11-04T12:00:00Z.",
             ),
             (
-                self.location() | {"sent_at": "2026-11-04T12:00:00"},
+                self.location() | {"sent_at": "2026-11-04T12:00:00", **METADATA},
                 "sent_at",
                 "sent_at is missing a timezone. Use Z or an offset such as -05:00.",
             ),
@@ -141,7 +184,7 @@ class ReceiverTests(unittest.TestCase):
                 for field, value in (("latitude", latitude), ("longitude", longitude)):
                     self.assertIsInstance(printed[field], float)
                     self.assertEqual(printed[field], float(value))
-                self.assertEqual(set(printed), {"latitude", "longitude", "sent_at", "received_at"})
+                self.assertEqual(set(printed), {"latitude", "longitude", "sent_at", "received_at", *METADATA})
 
     def test_coordinate_conversion_failures_report_field(self):
         for field in ("latitude", "longitude"):
@@ -314,7 +357,9 @@ class CallbackTests(unittest.TestCase):
             )
         self.assertEqual(output.getvalue(), "")
         self.assertTrue(self.notified.wait(1))
-        self.assertEqual(set(self.callback.call_args.args[0]), {"latitude", "longitude", "sent_at", "received_at"})
+        self.assertEqual(
+            set(self.callback.call_args.args[0]), {"latitude", "longitude", "sent_at", "received_at", *METADATA}
+        )
 
     def test_rejected_callback_returns_409_without_notification(self):
         self.callback.return_value = False
@@ -323,11 +368,20 @@ class CallbackTests(unittest.TestCase):
         )
         self.assertFalse(self.notified.is_set())
 
+    def test_missing_metadata_does_not_consume_acceptance(self):
+        old = {key: value for key, value in self.location().items() if key not in METADATA}
+        self.assertEqual(self.request(body=json.dumps(old))[0], 400)
+        self.callback.assert_not_called()
+        self.assertFalse(self.notified.is_set())
+        self.assertEqual(self.request(body=json.dumps(self.location()))[0], 200)
+        self.assertTrue(self.notified.wait(1))
+        self.callback.assert_called_once()
+
     def test_invalid_input_does_not_call_callbacks(self):
         for body, path in (
             ("{", "/location?token=test-session"),
             (json.dumps(self.location() | {"latitude": "bad"}), "/location?token=test-session"),
-            (json.dumps(self.location() | {"sent_at": "bad"}), "/location?token=test-session"),
+            (json.dumps(self.location() | {"sent_at": "bad", **METADATA}), "/location?token=test-session"),
             ("", "/location?token=wrong"),
         ):
             self.assertGreaterEqual(self.request(body=body, path=path)[0], 400)
@@ -380,6 +434,7 @@ class MainLifecycleTests(unittest.TestCase):
                                     "latitude": "40.42",
                                     "longitude": "-86.91",
                                     "sent_at": "2026-11-04T07:00:00-05:00",
+                                    **METADATA,
                                 }
                             ),
                             {"Content-Type": "application/json"},

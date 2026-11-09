@@ -9,7 +9,9 @@ from unittest.mock import Mock, patch
 
 from scripts import measurement_probe as probe
 
+METADATA = {"location_type": "inside", "location_name": "Example Hall", "location_detail": "2nd floor"}
 LOCATION = {
+    **METADATA,
     "latitude": 40.42,
     "longitude": -86.91,
     "sent_at": "2026-11-04T12:00:00Z",
@@ -93,7 +95,9 @@ class MeasurementTests(unittest.TestCase):
             connection.close()
 
     def good_post(self):
-        return self.post({"latitude": "40.42", "longitude": "-86.91", "sent_at": "2026-11-04T07:00:00-05:00"})
+        return self.post(
+            {"latitude": "40.42", "longitude": "-86.91", "sent_at": "2026-11-04T07:00:00-05:00", **METADATA}
+        )
 
     def successful_tunnel(self, token, *, stop_event, on_ready):
         self.stops.append(stop_event)
@@ -151,7 +155,7 @@ class MeasurementTests(unittest.TestCase):
             self.stops.append(stop_event)
             on_ready()
             self.assertEqual(
-                self.post({"latitude": 40.42, "longitude": -86.91, "sent_at": "2026-11-07T12:00:00.000Z"}),
+                self.post({"latitude": 40.42, "longitude": -86.91, "sent_at": "2026-11-07T12:00:00.000Z", **METADATA}),
                 (200, {"status": "ok"}),
             )
             stop_event.wait(3)
@@ -164,6 +168,26 @@ class MeasurementTests(unittest.TestCase):
         result = self.combined()
         self.assertEqual(result["location"]["latitude"], 40.42)
         self.assertEqual(set(result), {"location", "wifi", "speedtest"})
+        for field, value in METADATA.items():
+            self.assertEqual(result["location"][field], value)
+
+    def test_missing_metadata_does_not_start_measurement_before_correct_resend(self):
+        def tunnel(token, *, stop_event, on_ready):
+            self.stops.append(stop_event)
+            on_ready()
+            self.assertEqual(
+                self.post({"latitude": 40.42, "longitude": -86.91, "sent_at": LOCATION["sent_at"]})[0], 400
+            )
+            self.wifi.assert_not_called()
+            self.assertEqual(self.good_post()[0], 200)
+            stop_event.wait(3)
+            return 0
+
+        code, speed = self.run_main(tunnel=tunnel)
+        self.assertEqual(code, 0)
+        self.wifi.assert_called_once()
+        speed.assert_called_once()
+        self.assertEqual(len(self.combined()["location"]), 7)
 
     def test_wifi_runs_after_response_and_before_speedtest(self):
         order = []
@@ -348,7 +372,9 @@ class MeasurementTests(unittest.TestCase):
             def send(latitude):
                 barrier.wait(timeout=2)
                 statuses.append(
-                    self.post({"latitude": latitude, "longitude": "-86.91", "sent_at": LOCATION["sent_at"]})[0]
+                    self.post(
+                        {"latitude": latitude, "longitude": "-86.91", "sent_at": LOCATION["sent_at"], **METADATA}
+                    )[0]
                 )
 
             workers = [threading.Thread(target=send, args=(value,)) for value in ("1", "2")]

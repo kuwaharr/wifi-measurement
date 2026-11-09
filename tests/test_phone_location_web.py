@@ -1,7 +1,6 @@
 import http.client
 import io
 import json
-import re
 import shutil
 import subprocess
 import threading
@@ -14,6 +13,8 @@ from unittest.mock import Mock, patch
 from scripts import cloudflare_tunnel as tunnel
 from scripts import measurement_probe as measurement
 from scripts import phone_location_probe as phone
+
+METADATA = {"location_type": "inside", "location_name": "Example Hall", "location_detail": "2nd floor"}
 
 
 class PageTests(unittest.TestCase):
@@ -76,13 +77,36 @@ class PageTests(unittest.TestCase):
         self.assertNotIn(b"private path", body)
         self.assertNotIn(b"session-secret", body)
 
+    def test_fixed_css_and_javascript_resources_are_served(self):
+        for suffix, content_type in (("css", "text/css; charset=utf-8"), ("js", "text/javascript; charset=utf-8")):
+            with self.subTest(suffix=suffix):
+                status, headers, body = self.request(f"/phone-location.{suffix}")
+                self.assertEqual(status, 200)
+                self.assertEqual(body, phone.PAGE_PATH.with_suffix(f".{suffix}").read_bytes())
+                self.assertEqual(headers["Content-Type"], content_type)
+                self.assertEqual(int(headers["Content-Length"]), len(body))
+                self.assertEqual(headers["Cache-Control"], "no-store")
+                self.assertEqual(headers["Referrer-Policy"], "no-referrer")
+                self.assertNotIn(b"session-secret", body)
+        self.server.on_location.assert_not_called()
+        self.server.on_location_responded.assert_not_called()
+
+    def test_resource_failures_do_not_expose_paths_or_other_files(self):
+        with patch.object(Path, "read_bytes", side_effect=OSError("private path")), redirect_stderr(io.StringIO()):
+            for suffix in ("css", "js"):
+                status, headers, body = self.request(f"/phone-location.{suffix}")
+                self.assertEqual(status, 500)
+                self.assertNotIn(b"private path", body)
+        for path in ("/web/phone-location.js", "/phone-location.js/../README.md", "/phone-location.json"):
+            self.assertEqual(self.request(path)[0], 404)
+
     def test_browser_json_is_accepted_and_post_responses_are_not_cached(self):
-        body = json.dumps({"latitude": 40.42, "longitude": -86.91, "sent_at": "2026-11-07T12:00:00.000Z"})
+        body = json.dumps({"latitude": 40.42, "longitude": -86.91, "sent_at": "2026-11-07T12:00:00.000Z", **METADATA})
         status, headers, result = self.request("/location?token=session-secret", "POST", body)
         self.assertEqual((status, json.loads(result)), (200, {"status": "ok"}))
         self.assertEqual(headers["Cache-Control"], "no-store")
         location = self.server.on_location.call_args.args[0]
-        self.assertEqual(set(location), {"latitude", "longitude", "sent_at", "received_at"})
+        self.assertEqual(set(location), {"latitude", "longitude", "sent_at", "received_at", *METADATA})
         status, headers, body = self.request("/location?token=session-secret", "POST", "{}")
         self.assertEqual(status, 400)
         self.assertEqual(headers["Cache-Control"], "no-store")
@@ -167,14 +191,20 @@ class WebStartupTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node"), "Node.js is unavailable; browser-script simulation skipped")
 class PageScriptTests(unittest.TestCase):
     def test_permission_recovery_does_not_post_or_retry_without_click(self):
-        script = re.search(r"<script>(.*?)</script>", phone.PAGE_PATH.read_text(encoding="utf-8"), re.S).group(1)
+        script = phone.PAGE_PATH.with_suffix(".js").read_text(encoding="utf-8")
         harness = r"""
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const script = SCRIPT;
 async function scenario(failure, synchronous = false) {
-  const elements = Object.fromEntries(['send', 'status', 'coordinates', 'latitude', 'longitude', 'permission-help'].map(
-    id => [id, { disabled: true, hidden: true, textContent: '', addEventListener(event, fn) { this.click = fn; } }]));
+  const elements = Object.fromEntries(['send', 'status', 'coordinates', 'latitude', 'longitude', 'permission-help',
+      'location-form', 'location-type', 'location-name', 'location-detail'].map(
+    id => [id, { disabled: false, hidden: true, textContent: '', value: '',
+      reportValidity() { throw Error('Validation must not open a popup'); },
+      focus() { throw Error('Validation must not move focus automatically'); },
+      addEventListener(event, fn) { this.click = fn; } }]));
+  elements.send.disabled = true;
+  const submit = () => elements['location-form'].click({preventDefault() {}});
   let attempts = 0, posts = 0, succeed = false;
   let pending;
   const context = {
@@ -186,30 +216,63 @@ async function scenario(failure, synchronous = false) {
       geolocation: { getCurrentPosition(ok, bad, options) {
         attempts++;
         assert.equal(options.enableHighAccuracy, true);
-        if (succeed) { pending = ok({ coords: { latitude: 40, longitude: -86 } }); }
+        submit();
+        if (succeed) {
+          assert.equal(elements['location-name'].disabled, true);
+          elements['location-name'].value = 'changed during acquisition';
+          pending = ok({ coords: { latitude: 40, longitude: -86 } });
+        }
         else if (synchronous) { throw failure; }
         else { bad(failure); }
       } }
     },
-    fetch: async () => { posts++; return { status: 200, json: async () => ({status:'ok'}) }; },
+    fetch: async (url, options) => {
+      posts++;
+      const data = JSON.parse(options.body);
+      assert.equal(data.location_type, 'inside');
+      assert.equal(data.location_name, 'Example Hall');
+      assert.equal(data.location_detail, '2nd floor');
+      assert.equal(typeof data.latitude, 'number');
+      return { status: 200, json: async () => ({status:'ok'}) };
+    },
     URL, AbortController, setTimeout, clearTimeout
   };
   vm.runInNewContext(script, context);
   assert.equal(attempts, 0);
-  elements.send.click();
+  submit();
+  assert.equal(attempts, 0);
+  elements['location-type'].value = 'inside';
+  elements['location-detail'].value = '2nd floor';
+  for (const value of ['', '   ', 'x'.repeat(201), 'bad\0name']) {
+    elements['location-name'].value = value;
+    submit();
+    assert.equal(attempts, 0);
+    assert.equal(posts, 0);
+  }
+  elements['location-name'].value = ' Example Hall ';
+  for (const value of ['', '   ', 'x'.repeat(501), 'bad\0detail']) {
+    elements['location-detail'].value = value;
+    submit();
+    assert.equal(attempts, 0);
+    assert.equal(posts, 0);
+  }
+  elements['location-detail'].value = '2nd floor';
+  submit();
   assert.equal(attempts, 1);
   assert.equal(posts, 0);
   assert.equal(elements.send.disabled, false);
   assert.equal(elements['permission-help'].hidden, false);
   assert.match(elements.status.textContent, /blocked location access/);
   succeed = true;
-  elements.send.click();
+  assert.equal(elements['location-name'].disabled, false);
+  assert.equal(elements['location-name'].value, ' Example Hall ');
+  submit();
   await pending;
   assert.equal(attempts, 2);
   assert.equal(posts, 1);
   assert.equal(elements.send.disabled, true);
   assert.equal(elements['permission-help'].hidden, true);
-  elements.send.click();
+  submit();
   assert.equal(posts, 1);
   assert.match(elements.status.textContent, /PC received/);
 }

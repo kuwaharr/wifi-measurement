@@ -72,6 +72,23 @@ def validate_location(data):
         result["sent_at"] = sent_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     except (ValueError, OverflowError) as exc:
         raise LocationError("sent_at is outside the supported datetime range after UTC conversion.", "sent_at") from exc
+    for field in ("location_type", "location_name", "location_detail"):
+        if field not in data:
+            raise LocationError(f"Missing required field: {field}.", field)
+        value = data[field]
+        if not isinstance(value, str):
+            raise LocationError(f"{field} must be a JSON string.", field)
+        if field == "location_type":
+            if value not in ("inside", "outside"):
+                raise LocationError("location_type must be inside or outside.", field)
+        else:
+            value = value.strip()
+            maximum = 200 if field == "location_name" else 500
+            if not 1 <= len(value) <= maximum:
+                raise LocationError(f"{field} must contain 1 to {maximum} characters after trimming.", field)
+            if "\x00" in value:
+                raise LocationError(f"{field} must not contain NUL characters.", field)
+        result[field] = value
     return result
 
 
@@ -99,18 +116,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlsplit(self.path)
-        if url.path == "/phone-location":
-            if not valid_token(url.query, self.server.token):
+        resources = {
+            "/phone-location": (PAGE_PATH, "text/html; charset=utf-8"),
+            "/phone-location.css": (PAGE_PATH.with_suffix(".css"), "text/css; charset=utf-8"),
+            "/phone-location.js": (PAGE_PATH.with_suffix(".js"), "text/javascript; charset=utf-8"),
+        }
+        if url.path in resources:
+            if url.path == "/phone-location" and not valid_token(url.query, self.server.token):
                 self.send_json(403, {"error": "Missing or invalid token."})
                 return
+            path, content_type = resources[url.path]
             try:
-                body = PAGE_PATH.read_bytes()
+                body = path.read_bytes()
             except OSError:
                 print("Could not read phone location page.", file=sys.stderr)
                 self.send_json(500, {"error": "Location page is unavailable."})
                 return
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -229,6 +252,10 @@ def main(argv=()):
         print("Starting the tunnel automatically.", flush=True)
         print(
             "Required JSON: latitude and longitude (numeric strings or numbers), sent_at (ISO 8601 with timezone).",
+            flush=True,
+        )
+        print(
+            "Also required: location_type (inside/outside), location_name and location_detail (nonempty text).",
             flush=True,
         )
         print(

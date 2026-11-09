@@ -4,54 +4,7 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Send Location to PC</title>
-        <style>
-            body {
-                font-family: system-ui, sans-serif;
-                max-width: 36rem;
-                margin: 2rem auto;
-                padding: 0 1rem;
-            }
-            button {
-                font: inherit;
-                padding: 1rem;
-                width: 100%;
-            }
-            p {
-                line-height: 1.5;
-                overflow-wrap: break-word;
-            }
-            #status {
-                white-space: pre-line;
-            }
-            li {
-                line-height: 1.5;
-                margin-bottom: 0.75rem;
-            }
-            table {
-                width: 100%;
-                margin-top: 1.5rem;
-                border-collapse: collapse;
-            }
-            caption {
-                text-align: left;
-                font-weight: 600;
-                margin-bottom: 0.5rem;
-            }
-            th,
-            td {
-                padding: 0.65rem 0.5rem;
-                border-bottom: 1px solid #ccc;
-                text-align: left;
-                vertical-align: top;
-            }
-            th {
-                width: 6rem;
-            }
-            td {
-                font-variant-numeric: tabular-nums;
-                overflow-wrap: anywhere;
-            }
-        </style>
+        <link rel="stylesheet" href="/phone-location.css" />
     </head>
     <body>
         <h1>Send Location to PC</h1>
@@ -59,7 +12,37 @@
             Send this phone's current location to your PC.<br />
             Stay in the same place until the PC finishes measuring.
         </p>
-        <button id="send" type="button" disabled>Get Location and Send</button>
+        <form id="location-form" autocomplete="off" novalidate>
+            <label for="location-type">Location Type</label>
+            <select id="location-type" required>
+                <option value="">Select Inside or Outside</option>
+                <option value="inside">Inside</option>
+                <option value="outside">Outside</option>
+            </select>
+            <label for="location-name">Building or Landmark</label>
+            <p id="name-help">
+                Inside: building name. Outside: nearby place or landmark.
+            </p>
+            <input
+                id="location-name"
+                type="text"
+                required
+                aria-describedby="name-help"
+            />
+            <label for="location-detail">Location Details</label>
+            <p id="detail-help">
+                Include the floor when applicable, and describe the exact spot.
+            </p>
+            <textarea
+                id="location-detail"
+                rows="3"
+                required
+                aria-describedby="detail-help"
+            ></textarea>
+            <button id="send" type="submit" disabled>
+                Get Location and Send
+            </button>
+        </form>
         <table id="coordinates" hidden>
             <caption>
                 Acquired Location
@@ -112,142 +95,6 @@
                 This page cannot change iPhone or Safari permissions.
             </p>
         </section>
-        <script>
-            "use strict";
-            const button = document.getElementById("send");
-            const status = document.getElementById("status");
-            const coordinates = document.getElementById("coordinates");
-            const latitudeCell = document.getElementById("latitude");
-            const longitudeCell = document.getElementById("longitude");
-            const permissionHelp = document.getElementById("permission-help");
-            const tokens = new URL(window.location.href).searchParams.getAll(
-                "token",
-            );
-            const uncertain =
-                "Could not confirm receipt on the PC.\nIt may already have received your location.\nCheck the PC before restarting and opening a new QR code.";
-            let destination;
-            if (tokens.length !== 1 || tokens[0] === "") {
-                status.textContent =
-                    "Open this page again using the QR code displayed on your PC.";
-            } else if (!window.isSecureContext || !navigator.geolocation) {
-                status.textContent =
-                    "Location requires a secure connection and a browser that supports location access.\nUse the HTTPS QR code from your PC.";
-            } else {
-                destination = new URL("/location", window.location.origin);
-                destination.searchParams.set("token", tokens[0]);
-                button.disabled = false;
-            }
-
-            function locationFailure(error) {
-                const messages = {
-                    1: "Safari or iOS blocked location access.\nNo location was sent.\nCheck both permissions below, then try again.",
-                    2: "Your location is unavailable.\nTry again.",
-                    3: "Location acquisition timed out.\nTry again.",
-                };
-                const denied =
-                    error.code === 1 ||
-                    error.name === "SecurityError" ||
-                    error.name === "NotAllowedError";
-                permissionHelp.hidden = !denied;
-                status.textContent = denied
-                    ? messages[1]
-                    : messages[error.code] ||
-                      "Could not start location acquisition.\nNothing was sent.\nTry again.";
-                if (error.code === 1)
-                    status.textContent += "\n(PERMISSION_DENIED, code 1)";
-                button.textContent = "Try Location Again";
-                button.disabled = false;
-            }
-
-            async function acquired(position) {
-                const latitude = position.coords.latitude;
-                const longitude = position.coords.longitude;
-                if (
-                    !Number.isFinite(latitude) ||
-                    !Number.isFinite(longitude) ||
-                    latitude < -90 ||
-                    latitude > 90 ||
-                    longitude < -180 ||
-                    longitude > 180
-                ) {
-                    status.textContent =
-                        "Invalid coordinates received.\nNothing was sent.\nTry again.";
-                    button.disabled = false;
-                    return;
-                }
-                latitudeCell.textContent = String(latitude);
-                longitudeCell.textContent = String(longitude);
-                coordinates.hidden = false;
-                status.textContent = "Sending location...";
-                const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), 15000);
-                try {
-                    const response = await fetch(destination.href, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            latitude,
-                            longitude,
-                            sent_at: new Date().toISOString(),
-                        }),
-                        signal: controller.signal,
-                    });
-                    if (response.status !== 200) {
-                        if (response.status === 403) {
-                            status.textContent =
-                                "This receiving URL is invalid.\nRestart on the PC and open the new QR code.";
-                        } else if (response.status === 409) {
-                            status.textContent =
-                                "A location was already accepted, or receiving has ended.\nCheck the PC.";
-                        } else if (response.status >= 500) {
-                            status.textContent = uncertain;
-                        } else {
-                            status.textContent =
-                                "The PC did not accept this request.\nCheck the PC before restarting with a new QR code.";
-                        }
-                        return;
-                    }
-                    const data = await response.json();
-                    if (
-                        controller.signal.aborted ||
-                        data === null ||
-                        data.status !== "ok"
-                    ) {
-                        status.textContent = uncertain;
-                        return;
-                    }
-                    status.textContent =
-                        "The PC received your location.\nCheck measurement results on the PC.\nStay in the same place until it finishes.";
-                } catch (error) {
-                    status.textContent = uncertain;
-                } finally {
-                    clearTimeout(timer);
-                }
-            }
-
-            button.addEventListener("click", () => {
-                if (button.disabled) return;
-                button.disabled = true;
-                permissionHelp.hidden = true;
-                button.textContent = "Get Location and Send";
-                coordinates.hidden = true;
-                latitudeCell.textContent = "";
-                longitudeCell.textContent = "";
-                status.textContent = "Acquiring location...";
-                try {
-                    navigator.geolocation.getCurrentPosition(
-                        acquired,
-                        locationFailure,
-                        {
-                            enableHighAccuracy: true,
-                            maximumAge: 0,
-                            timeout: 30000,
-                        },
-                    );
-                } catch (error) {
-                    locationFailure(error);
-                }
-            });
-        </script>
+        <script src="/phone-location.js" defer></script>
     </body>
 </html>

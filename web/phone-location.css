@@ -1,0 +1,65 @@
+body {
+    font-family: system-ui, sans-serif;
+    max-width: 36rem;
+    margin: 2rem auto;
+    padding: 0 1rem;
+}
+button {
+    font: inherit;
+    padding: 1rem;
+    width: 100%;
+}
+label {
+    display: block;
+    margin-top: 1rem;
+    font-weight: 600;
+}
+input,
+select,
+textarea {
+    box-sizing: border-box;
+    width: 100%;
+    font: inherit;
+    padding: 0.65rem;
+}
+form button {
+    margin-top: 1rem;
+}
+p {
+    line-height: 1.5;
+    overflow-wrap: break-word;
+}
+#status {
+    white-space: pre-line;
+}
+#status.input-error {
+    color: #b91c1c;
+}
+li {
+    line-height: 1.5;
+    margin-bottom: 0.75rem;
+}
+table {
+    width: 100%;
+    margin-top: 1.5rem;
+    border-collapse: collapse;
+}
+caption {
+    text-align: left;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+th,
+td {
+    padding: 0.65rem 0.5rem;
+    border-bottom: 1px solid #ccc;
+    text-align: left;
+    vertical-align: top;
+}
+th {
+    width: 6rem;
+}
+td {
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
