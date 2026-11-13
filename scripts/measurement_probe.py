@@ -3,6 +3,7 @@
 import argparse
 import json
 import queue
+import re
 import secrets
 import sys
 import threading
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.cloudflare_tunnel import TunnelCleanupError, run_tunnel
 from scripts.phone_location_probe import Handler
 from src.speedtest import run_speedtest
+from src.storage import DEFAULT_DB_PATH, StorageError, initialize_database, prepare_measurement, save_measurement
 from src.wifi import get_wifi_info
 
 LOCATION_TIMEOUT = 180
@@ -68,6 +70,14 @@ class LocationInbox:
 def main(argv=()):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args(argv)
+    try:
+        initialize_database(DEFAULT_DB_PATH)
+    except KeyboardInterrupt:
+        print("Database preparation interrupted.", file=sys.stderr)
+        return 130
+    except Exception as exc:
+        print(f"Database preparation failed ({DEFAULT_DB_PATH}): {exc}", file=sys.stderr)
+        return 1
     inbox = LocationInbox()
     stop = threading.Event()
     tunnel_results = queue.Queue()
@@ -77,6 +87,15 @@ def main(argv=()):
     tunnel = None
     result_json = None
     exit_code = 1
+    stage = "Location reception"
+    record = None
+    token = None
+
+    def error_detail(error):
+        detail = str(error)
+        if token:
+            detail = detail.replace(token, "[redacted token]")
+        return re.sub(r"https://[^\s]*\.trycloudflare\.com[^\s]*", "[redacted public URL]", detail)
 
     def tunnel_worker():
         try:
@@ -106,7 +125,7 @@ def main(argv=()):
             return
         if requested and code == 0 and error is None:
             return
-        detail = str(error) if error is not None else f"exit code {code}"
+        detail = error_detail(error) if error is not None else f"exit code {code}"
         if isinstance(error, TunnelCleanupError):
             raise RuntimeError(f"Tunnel cleanup failed: {detail}")
         if inbox.check() is None:
@@ -133,19 +152,23 @@ def main(argv=()):
                 break
             inbox.responded.wait(POLL_INTERVAL)
         print("Location accepted. Acquiring Wi-Fi information...", flush=True)
+        stage = "Wi-Fi acquisition"
         wifi = get_wifi_info()
         print("Wi-Fi acquired. Starting one Speedtest...", flush=True)
+        stage = "Speedtest"
         speedtest = run_speedtest()
         check_workers()
-        result_json = json.dumps(
-            {"location": location, "wifi": wifi, "speedtest": speedtest}, indent=2, allow_nan=False
-        )
+        stage = "Measurement validation"
+        measurement = {"location": location, "wifi": wifi, "speedtest": speedtest}
+        record = prepare_measurement(measurement)
+        stage = "Measurement JSON serialization"
+        result_json = json.dumps({**measurement, "attempt_count": 1}, indent=2, allow_nan=False)
         exit_code = 0
     except KeyboardInterrupt:
         print("Measurement interrupted.", file=sys.stderr)
         exit_code = 130
     except Exception as exc:
-        print(f"Measurement failed: {exc}", file=sys.stderr)
+        print(f"{stage} failed: {error_detail(exc)}", file=sys.stderr)
     finally:
         inbox.close()
         stop.set()
@@ -160,7 +183,7 @@ def main(argv=()):
                 print("Cleanup interrupted.", file=sys.stderr)
             except Exception as exc:
                 exit_code = 1
-                print(f"Cleanup failed: {exc}", file=sys.stderr)
+                print(f"Cleanup failed: {error_detail(exc)}", file=sys.stderr)
 
         if server is not None:
             if receiver is not None and receiver.is_alive():
@@ -179,7 +202,41 @@ def main(argv=()):
                 cleanup(join_worker)
         cleanup(check_workers)
     if exit_code == 0 and result_json is not None:
-        print(result_json, flush=True)
+        try:
+            row_id = save_measurement(record, DEFAULT_DB_PATH)
+        except KeyboardInterrupt as exc:
+            outcome = getattr(exc, "outcome", "not saved")
+            print(
+                f"Database save interrupted; persistence outcome: {outcome}. Check database before retrying.",
+                file=sys.stderr,
+            )
+            return 130
+        except Exception as exc:
+            outcome = exc.outcome if isinstance(exc, StorageError) else "not saved"
+            if outcome == "not saved":
+                message = "Measurement acquired; DB not saved"
+            elif outcome == "saved":
+                message = "DB saved; post-commit failure. Check database"
+            else:
+                message = "DB persistence outcome unknown. Check database before retrying"
+            print(f"Database save failed ({DEFAULT_DB_PATH}): {message}: {error_detail(exc)}", file=sys.stderr)
+            try:
+                print(result_json, flush=True)
+            except KeyboardInterrupt:
+                print("Rescue display interrupted; check database persistence outcome above.", file=sys.stderr)
+                return 130
+            except Exception:
+                print("Rescue display failed; check database persistence outcome above.", file=sys.stderr)
+            return 1
+        try:
+            print(f"Database saved: {DEFAULT_DB_PATH.resolve()} (row ID {row_id}).", file=sys.stderr)
+            print(result_json, flush=True)
+        except KeyboardInterrupt:
+            print("Display interrupted after DB commit; data saved. Check database.", file=sys.stderr)
+            return 130
+        except Exception:
+            print("Display failed after DB commit; data saved. Check database.", file=sys.stderr)
+            return 1
     return exit_code
 
 

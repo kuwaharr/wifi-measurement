@@ -1,10 +1,13 @@
 import http.client
 import io
 import json
+import sqlite3
+import tempfile
 import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from scripts import measurement_probe as probe
@@ -17,7 +20,34 @@ LOCATION = {
     "sent_at": "2026-11-04T12:00:00Z",
     "received_at": "2026-11-04T12:00:01Z",
 }
-SPEEDTEST = {"timestamp": "2026-11-04T12:00:05Z", "download": {"bandwidth": 12345}, "packetLoss": None}
+WIFI = {
+    "ssid": "test",
+    "ssid_hex": "74657374",
+    "bssid": "01:23:45:67:89:ab",
+    "signal_quality_percent": 80,
+    "rssi_dbm": -51,
+    "channel": 36,
+    "frequency_khz": 5180000,
+    "captured_at": "2026-11-04T12:00:02Z",
+}
+SPEEDTEST = {
+    "timestamp": "2026-11-04T12:00:05Z",
+    "packetLoss": 0,
+    "ping": {"latency": 1.5, "jitter": 0.2, "low": 1, "high": 2},
+    "download": {
+        "bandwidth": 12345,
+        "bytes": 23456,
+        "elapsed": 1000,
+        "latency": {"iqm": 3.5, "jitter": 0.5, "low": 2, "high": 4},
+    },
+    "upload": {
+        "bandwidth": 5432,
+        "bytes": 6543,
+        "elapsed": 2000,
+        "latency": {"iqm": 4.5, "jitter": 0.6, "low": 3, "high": 5},
+    },
+    "server": {"id": 123, "name": "Server", "location": "City"},
+}
 
 
 class InboxTests(unittest.TestCase):
@@ -69,7 +99,13 @@ class InboxTests(unittest.TestCase):
 
 class MeasurementTests(unittest.TestCase):
     def setUp(self):
-        self.wifi_patch = patch.object(probe, "get_wifi_info", return_value={"ssid": "test", "rssi_dbm": -51})
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.db_path = Path(temporary.name) / "measurements.db"
+        db_patch = patch.object(probe, "DEFAULT_DB_PATH", self.db_path)
+        db_patch.start()
+        self.addCleanup(db_patch.stop)
+        self.wifi_patch = patch.object(probe, "get_wifi_info", return_value=WIFI.copy())
         self.wifi = self.wifi_patch.start()
         self.addCleanup(self.wifi_patch.stop)
         self.servers = []
@@ -133,6 +169,114 @@ class MeasurementTests(unittest.TestCase):
         text = self.output.getvalue()
         return json.loads(text[text.index("{\n") :])
 
+    def row_count(self):
+        connection = sqlite3.connect(self.db_path)
+        try:
+            return connection.execute("SELECT count(*) FROM measurements").fetchone()[0]
+        finally:
+            connection.close()
+
+    def test_database_preparation_precedes_all_acquisition(self):
+        with (
+            patch.object(probe, "initialize_database", side_effect=OSError("read only")),
+            patch.object(probe, "ThreadingHTTPServer") as server,
+            patch.object(probe, "run_tunnel") as tunnel,
+            patch.object(probe, "run_speedtest") as speed,
+            redirect_stderr(self.errors),
+        ):
+            self.assertEqual(probe.main(), 1)
+        server.assert_not_called()
+        tunnel.assert_not_called()
+        speed.assert_not_called()
+        self.assertIn("Database preparation", self.errors.getvalue())
+        self.assertFalse(self.db_path.exists())
+
+    def test_validation_failure_has_no_saved_row_or_rescue_json(self):
+        for value in (None, {}, SPEEDTEST | {"packetLoss": None}):
+            self.output = io.StringIO()
+            self.errors = io.StringIO()
+            code, _ = self.run_main(speedtest=lambda: value)
+            self.assertEqual(code, 1)
+            self.assertIn("Measurement validation", self.errors.getvalue())
+            self.assertNotIn('"attempt_count":', self.output.getvalue())
+            self.assertEqual(self.row_count(), 0)
+
+    def test_serialization_exception_after_validation_prevents_save(self):
+        dumps = json.dumps
+
+        def failing_dumps(*args, **kwargs):
+            if "indent" in kwargs:
+                raise ValueError("serialization failed")
+            return dumps(*args, **kwargs)
+
+        with patch.object(probe.json, "dumps", side_effect=failing_dumps):
+            code, _ = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(self.row_count(), 0)
+        self.assertIn("JSON serialization", self.errors.getvalue())
+
+    def test_save_occurs_once_after_validation_and_cleanup(self):
+        order = []
+        prepare = probe.prepare_measurement
+        save = probe.save_measurement
+
+        def validate(measurement):
+            order.append("validation")
+            return prepare(measurement)
+
+        def persist(record, path):
+            self.assertTrue(self.stops[0].is_set())
+            self.assertEqual(self.servers[0].socket.fileno(), -1)
+            self.assertFalse(any(t.name.startswith("measurement-") for t in threading.enumerate()))
+            order.append("save")
+            return save(record, path)
+
+        with (
+            patch.object(probe, "prepare_measurement", side_effect=validate),
+            patch.object(probe, "save_measurement", side_effect=persist) as saving,
+        ):
+            code, _ = self.run_main()
+        self.assertEqual(code, 0)
+        saving.assert_called_once()
+        self.assertEqual(order, ["validation", "save"])
+        self.assertEqual(self.row_count(), 1)
+
+    def test_database_save_failure_rescues_complete_json_and_interrupt_does_not(self):
+        for error, expected, message in (
+            (OSError("locked"), 1, "DB not saved"),
+            (probe.StorageError("commit IO", "unknown"), 1, "outcome unknown"),
+            (KeyboardInterrupt(), 130, "interrupted"),
+        ):
+            self.output = io.StringIO()
+            self.errors = io.StringIO()
+            with patch.object(probe, "save_measurement", side_effect=error) as saving:
+                code, _ = self.run_main()
+            self.assertEqual(code, expected)
+            saving.assert_called_once()
+            self.assertIn(message, self.errors.getvalue())
+            self.assertEqual(self.row_count(), 0)
+            if expected == 1:
+                self.assertEqual(self.combined()["speedtest"], SPEEDTEST)
+                self.assertEqual(self.combined()["attempt_count"], 1)
+            else:
+                self.assertNotIn('"attempt_count":', self.output.getvalue())
+
+    def test_post_commit_display_failure_reports_saved_without_retry(self):
+        class BrokenDisplay(io.StringIO):
+            def write(self, text):
+                if text.startswith("{\n"):
+                    raise OSError("display unavailable")
+                return super().write(text)
+
+        self.output = BrokenDisplay()
+        with patch.object(probe, "save_measurement", wraps=probe.save_measurement) as saving:
+            code, _ = self.run_main()
+        self.assertEqual(code, 1)
+        saving.assert_called_once()
+        self.assertEqual(self.row_count(), 1)
+        self.assertIn("data saved", self.errors.getvalue())
+        self.assertNotIn("not saved", self.errors.getvalue())
+
     def test_success_http_response_and_full_result(self):
         def speedtest():
             self.assertTrue(self.servers[0].on_location_responded.__self__.is_set())
@@ -145,9 +289,15 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(result["speedtest"], SPEEDTEST)
         self.assertEqual(result["location"]["sent_at"], LOCATION["sent_at"])
         self.assertEqual(result["location"]["latitude"], 40.42)
-        self.assertEqual(set(result), {"location", "wifi", "speedtest"})
+        self.assertEqual(set(result), {"location", "wifi", "speedtest", "attempt_count"})
+        self.assertEqual(result["attempt_count"], 1)
+        with sqlite3.connect(self.db_path) as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM measurements").fetchone()[0], 1)
+        connection.close()
+        self.assertIn(str(self.db_path), self.errors.getvalue())
+        self.assertIn("row ID 1", self.errors.getvalue())
         self.assertEqual(result["wifi"], self.wifi.return_value)
-        self.assertEqual(self.output.getvalue().count('"location":'), 1)
+        self.assertEqual(self.output.getvalue().count('{\n  "location":'), 1)
         self.assertNotIn(self.servers[0].token, json.dumps(result))
 
     def test_browser_json_follows_existing_measurement_flow(self):
@@ -167,7 +317,7 @@ class MeasurementTests(unittest.TestCase):
         speed.assert_called_once()
         result = self.combined()
         self.assertEqual(result["location"]["latitude"], 40.42)
-        self.assertEqual(set(result), {"location", "wifi", "speedtest"})
+        self.assertEqual(set(result), {"location", "wifi", "speedtest", "attempt_count"})
         for field, value in METADATA.items():
             self.assertEqual(result["location"][field], value)
 
@@ -195,7 +345,7 @@ class MeasurementTests(unittest.TestCase):
         def wifi():
             self.assertTrue(self.servers[0].on_location_responded.__self__.is_set())
             order.append("wifi")
-            return {"ssid": "test"}
+            return WIFI.copy()
 
         def speedtest():
             order.append("speedtest")
@@ -206,7 +356,7 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(order, ["wifi", "speedtest"])
         self.wifi.assert_called_once()
-        self.assertEqual(self.combined()["wifi"], {"ssid": "test"})
+        self.assertEqual(self.combined()["wifi"], WIFI)
 
     def test_wifi_failures_and_interrupt_do_not_run_speedtest(self):
         for error, code in (

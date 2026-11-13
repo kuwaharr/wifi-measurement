@@ -1,2 +1,6 @@
 .venv/
 __pycache__/
+/measurements.db
+/measurements.db-journal
+/measurements.db-wal
+/measurements.db-shm
