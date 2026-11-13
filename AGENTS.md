@@ -101,4 +101,5 @@ Do not collect unnecessary optional Speedtest metadata, including:
   - `approved`: Approved for implementation; implementation or required verification is still in progress.
   - `completed`: Implementation and required verification are complete.
 - Define the status values here only; do not repeat their definitions in individual planning documents.
+- Agents may set the status to `draft` when creating a planning document. After creation, agents must not change the status field; only the user may change it, including transitions to `approved` or `completed`.
 - Keep each document's current status, feature-specific completion criteria, verification results, and unverified items in that document. Distinguish automated tests from manual verification.
